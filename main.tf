@@ -101,25 +101,35 @@ resource "aws_security_group" "jenkins_sg" {
   }
 }
 
-# Create Additional EBS Volume
-resource "aws_ebs_volume" "additional_volume" {
-  availability_zone = aws_instance.jenkins_master.availability_zone
-  size              = 8
-  type              = "gp2"
+# Create IAM Role for EC2 Instance with SSM Permissions
+resource "aws_iam_role" "ec2_ssm_role" {
+  name               = "ec2-ssm-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
 }
 
-# Attach Additional EBS Volume
-resource "aws_volume_attachment" "attach_volume" {
-  device_name = "/dev/sdf"
-  volume_id   = aws_ebs_volume.additional_volume.id
-  instance_id = aws_instance.jenkins_master.id
+# Attach AmazonSSMManagedInstanceCore Policy to IAM Role
+resource "aws_iam_role_policy_attachment" "ssm_policy_attachment" {
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+  role       = aws_iam_role.ec2_ssm_role.name
 }
 
-# Create Jenkins EC2 Instance
+# Create Jenkins EC2 Instance with SSM Role
 resource "aws_instance" "jenkins_master" {
   ami           = data.aws_ami.amazon_linux_2023.id
   instance_type = "t3.micro"
   key_name      = "new-aws-deploy-key"
+  iam_instance_profile = aws_iam_role.ec2_ssm_role.name
 
   root_block_device {
     volume_size = 8
@@ -170,6 +180,20 @@ resource "aws_instance" "jenkins_master" {
 # Allocate Elastic IP for Jenkins
 resource "aws_eip" "jenkins_eip" {
   instance = aws_instance.jenkins_master.id
+}
+
+# Create Additional EBS Volume
+resource "aws_ebs_volume" "additional_volume" {
+  availability_zone = aws_instance.jenkins_master.availability_zone
+  size              = 8
+  type              = "gp2"
+}
+
+# Attach Additional EBS Volume
+resource "aws_volume_attachment" "attach_volume" {
+  device_name = "/dev/sdf"
+  volume_id   = aws_ebs_volume.additional_volume.id
+  instance_id = aws_instance.jenkins_master.id
 }
 
 # Create ECS Cluster for Jenkins Agents
