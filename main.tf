@@ -2,7 +2,7 @@ provider "aws" {
   region = "us-east-2"
 }
 
-# Define the VPC (Virtual Private Cloud)
+# Define the VPC
 resource "aws_vpc" "main" {
   cidr_block = "10.0.0.0/16"
 
@@ -23,7 +23,7 @@ resource "aws_subnet" "public_subnet" {
   }
 }
 
-# Create the Internet Gateway
+# Create Internet Gateway
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 
@@ -32,7 +32,7 @@ resource "aws_internet_gateway" "main" {
   }
 }
 
-# Modify the public subnet route table to route traffic to the Internet Gateway
+# Modify Public Subnet Route Table
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -46,19 +46,19 @@ resource "aws_route_table" "public" {
   }
 }
 
-# Associate the route table with the public subnet
+# Associate Route Table with Public Subnet
 resource "aws_route_table_association" "public" {
   subnet_id      = aws_subnet.public_subnet.id
   route_table_id = aws_route_table.public.id
 }
 
-# Fetch the latest Amazon Linux 2023 AMI
+# Fetch Latest Amazon Linux 2023 AMI
 data "aws_ami" "amazon_linux_2023" {
   most_recent = true
 
   filter {
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]  # Amazon Linux 2023 AMI naming pattern
+    values = ["al2023-ami-*-x86_64"]
   }
 
   filter {
@@ -71,10 +71,10 @@ data "aws_ami" "amazon_linux_2023" {
     values = ["hvm"]
   }
 
-  owners = ["137112412989"]  # AWS Amazon Linux 2023 AMI owner ID
+  owners = ["137112412989"]  # Amazon Linux 2023 AMI owner ID
 }
 
-# Create the Jenkins security group
+# Create Jenkins Security Group
 resource "aws_security_group" "jenkins_sg" {
   name_prefix = "jenkins-sg-"
   description = "Allow SSH and HTTP(S) access"
@@ -101,56 +101,65 @@ resource "aws_security_group" "jenkins_sg" {
   }
 }
 
-# Define the additional EBS volume
+# Create Additional EBS Volume
 resource "aws_ebs_volume" "additional_volume" {
   availability_zone = aws_instance.jenkins_master.availability_zone
-  size              = 8  # Size in GB
+  size              = 8
   type              = "gp2"
 }
 
-# Attach the additional EBS volume to the instance
+# Attach Additional EBS Volume
 resource "aws_volume_attachment" "attach_volume" {
   device_name = "/dev/sdf"
   volume_id   = aws_ebs_volume.additional_volume.id
   instance_id = aws_instance.jenkins_master.id
 }
 
-# Create the Jenkins instance
+# Create Jenkins EC2 Instance
 resource "aws_instance" "jenkins_master" {
   ami           = data.aws_ami.amazon_linux_2023.id
   instance_type = "t3.micro"
-  key_name      = "new-aws-deploy-key"  # Replace with your SSH key pair name
+  key_name      = "new-aws-deploy-key"
 
-  # Root block device configuration (for the root volume)
   root_block_device {
-    volume_size = 8  # Increase size as needed (in GB)
+    volume_size = 8
   }
 
-  # Security Group Association
   vpc_security_group_ids = [aws_security_group.jenkins_sg.id]
 
-  # User data script for Jenkins setup
   user_data = <<-EOF
               #!/bin/bash
-              # Update system and install dependencies
               sudo yum update -y
-              sudo yum install -y wget
+              sudo yum install -y wget java-17-amazon-corretto-devel
 
-              # Install Amazon Corretto 17 JDK (preferred over OpenJDK)
-              sudo yum install -y java-17-amazon-corretto-devel
-
-              # Add the Jenkins repository (latest stable version)
-              sudo wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat/jenkins.repo
               # Install Jenkins
+              sudo wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat/jenkins.repo
               sudo rpm --import https://pkg.jenkins.io/redhat/jenkins.io.key
               sudo yum --nogpgcheck install -y jenkins
 
               # Start Jenkins service
               sudo systemctl start jenkins
               sudo systemctl enable jenkins
+
+              # Capture initial Jenkins admin password
+              sudo cat /var/lib/jenkins/secrets/initialAdminPassword > /home/ec2-user/jenkins-admin-password
+              sudo chmod 600 /home/ec2-user/jenkins-admin-password
+
+              # Install AWS CLI (if not installed)
+              sudo yum install -y aws-cli
+
+              # Wait for Jenkins to be ready
+              sleep 60
+
+              # Install AWS EC2 and ECS plugins via Jenkins CLI
+              JENKINS_URL="http://localhost:8080"
+              ADMIN_PASSWORD=$(sudo cat /home/ec2-user/jenkins-admin-password)
+
+              wget -O jenkins-cli.jar "$JENKINS_URL/jnlpJars/jenkins-cli.jar"
+              java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD install-plugin aws-ecs aws-java-sdk-ec2
+              java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD restart
               EOF
 
-  # Tags and dependencies
   tags = {
     Name = "Jenkins Master"
   }
@@ -158,13 +167,23 @@ resource "aws_instance" "jenkins_master" {
   depends_on = [aws_security_group.jenkins_sg, aws_internet_gateway.main]
 }
 
-# Allocate Elastic IP for the Jenkins instance
+# Allocate Elastic IP for Jenkins
 resource "aws_eip" "jenkins_eip" {
   instance = aws_instance.jenkins_master.id
 }
 
-# Output the Jenkins URL
+# Create ECS Cluster for Jenkins Agents
+resource "aws_ecs_cluster" "jenkins_fargate_cluster" {
+  name = "jenkins-fargate-cluster"
+}
+
+# Output Jenkins URL
 output "jenkins_url" {
   value = "http://${aws_instance.jenkins_master.public_ip}:8080"
+}
+
+# Output ECS Cluster ARN
+output "ecs_cluster_arn" {
+  value = aws_ecs_cluster.jenkins_fargate_cluster.arn
 }
 
