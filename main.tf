@@ -124,12 +124,18 @@ resource "aws_iam_role_policy_attachment" "ssm_policy_attachment" {
   role       = aws_iam_role.ec2_ssm_role.name
 }
 
-# Create Jenkins EC2 Instance with SSM Role
+# Create IAM Instance Profile
+resource "aws_iam_instance_profile" "ec2_ssm_instance_profile" {
+  name = "ec2-ssm-instance-profile"
+  role = aws_iam_role.ec2_ssm_role.name
+}
+
+# Create Jenkins EC2 Instance with IAM Instance Profile
 resource "aws_instance" "jenkins_master" {
-  ami           = data.aws_ami.amazon_linux_2023.id
-  instance_type = "t3.micro"
-  key_name      = "new-aws-deploy-key"
-  iam_instance_profile = aws_iam_role.ec2_ssm_role.name
+  ami                   = data.aws_ami.amazon_linux_2023.id
+  instance_type         = "t3.micro"
+  key_name              = "new-aws-deploy-key"
+  iam_instance_profile  = aws_iam_instance_profile.ec2_ssm_instance_profile.name
 
   root_block_device {
     volume_size = 8
