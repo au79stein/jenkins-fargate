@@ -126,7 +126,7 @@ resource "aws_iam_role_policy_attachment" "ssm_policy_attachment" {
 
 # Attach IAM Role Policy to Allow Attaching Other Policies (for automation)
 resource "aws_iam_role_policy_attachment" "iam_attach_policy_attachment" {
-  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess" # Allows attaching other policies
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
   role       = aws_iam_role.ec2_ssm_role.name
 }
 
@@ -185,6 +185,7 @@ resource "aws_instance" "jenkins_master" {
               sudo yum install -y amazon-ssm-agent
               sudo systemctl start amazon-ssm-agent
               sudo systemctl enable amazon-ssm-agent
+              sudo dnf install -y https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm
               EOF
 
   tags = {
