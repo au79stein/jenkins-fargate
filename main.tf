@@ -124,6 +124,12 @@ resource "aws_iam_role_policy_attachment" "ssm_policy_attachment" {
   role       = aws_iam_role.ec2_ssm_role.name
 }
 
+# Attach IAM Role Policy to Allow Attaching Other Policies (for automation)
+resource "aws_iam_role_policy_attachment" "iam_attach_policy_attachment" {
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess" # Allows attaching other policies
+  role       = aws_iam_role.ec2_ssm_role.name
+}
+
 # Create IAM Instance Profile
 resource "aws_iam_instance_profile" "ec2_ssm_instance_profile" {
   name = "ec2-ssm-instance-profile"
@@ -174,6 +180,11 @@ resource "aws_instance" "jenkins_master" {
               wget -O jenkins-cli.jar "$JENKINS_URL/jnlpJars/jenkins-cli.jar"
               java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD install-plugin aws-ecs aws-java-sdk-ec2
               java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD restart
+
+              # SSM Agent
+              sudo yum install -y amazon-ssm-agent
+              sudo systemctl start amazon-ssm-agent
+              sudo systemctl enable amazon-ssm-agent
               EOF
 
   tags = {
