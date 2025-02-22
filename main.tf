@@ -144,7 +144,7 @@ resource "aws_instance" "jenkins_master" {
   iam_instance_profile  = aws_iam_instance_profile.ec2_ssm_instance_profile.name
 
   root_block_device {
-    volume_size = 8
+    volume_size = 20
   }
 
   vpc_security_group_ids = [aws_security_group.jenkins_sg.id]
@@ -261,19 +261,21 @@ resource "aws_eip" "jenkins_eip" {
   instance = aws_instance.jenkins_master.id
 }
 
+# doesn't seem to be working correctly, not being mounte
+# troubleshoot later just bumped up root fs to 20GB for now
 # Create Additional EBS Volume
-resource "aws_ebs_volume" "additional_volume" {
-  availability_zone = aws_instance.jenkins_master.availability_zone
-  size              = 8
-  type              = "gp2"
-}
-
-# Attach Additional EBS Volume
-resource "aws_volume_attachment" "attach_volume" {
-  device_name = "/dev/sdf"
-  volume_id   = aws_ebs_volume.additional_volume.id
-  instance_id = aws_instance.jenkins_master.id
-}
+#resource "aws_ebs_volume" "additional_volume" {
+#  availability_zone = aws_instance.jenkins_master.availability_zone
+#  size              = 8
+#  type              = "gp2"
+#}
+#
+## Attach Additional EBS Volume
+#resource "aws_volume_attachment" "attach_volume" {
+#  device_name = "/dev/sdf"
+#  volume_id   = aws_ebs_volume.additional_volume.id
+#  instance_id = aws_instance.jenkins_master.id
+#}
 
 # Create ECS Cluster for Jenkins Agents
 resource "aws_ecs_cluster" "jenkins_fargate_cluster" {
