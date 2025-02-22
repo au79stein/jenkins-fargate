@@ -154,6 +154,14 @@ resource "aws_instance" "jenkins_master" {
               sudo yum update -y
               sudo yum install -y wget java-17-amazon-corretto-devel
 
+              # SSM Agent
+              sudo yum install -y amazon-ssm-agent
+              sudo systemctl start amazon-ssm-agent
+              sudo systemctl enable amazon-ssm-agent
+
+              # Install Session Manager Plugin
+              sudo dnf install -y https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm
+
               # Install Jenkins
               sudo wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat/jenkins.repo
               sudo rpm --import https://pkg.jenkins.io/redhat/jenkins.io.key
@@ -163,29 +171,76 @@ resource "aws_instance" "jenkins_master" {
               sudo systemctl start jenkins
               sudo systemctl enable jenkins
 
-              # Capture initial Jenkins admin password
-              sudo cat /var/lib/jenkins/secrets/initialAdminPassword > /home/ec2-user/jenkins-admin-password
-              sudo chmod 600 /home/ec2-user/jenkins-admin-password
+              # Wait for Jenkins to be ready
+              sleep 60
 
-              # Install AWS CLI (if not installed)
-              sudo yum install -y aws-cli
+              # Capture initial Jenkins admin password
+              JENKINS_PASSWORD_FILE="/var/lib/jenkins/secrets/initialAdminPassword"
+              ADMIN_PASSWORD=$(sudo cat "$JENKINS_PASSWORD_FILE")
+              sudo cat $JENKINS_PASSWORD_FILE > /home/ec2-user/jenkins-admin-password
+
+
+              # Store Jenkins password in AWS SSM (overwrite if exists)
+              INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+              aws ssm put-parameter --name "/jenkins/admin-password" --value "$ADMIN_PASSWORD" --type "SecureString" --overwrite --region us-east-2
+
+
+              # Create Groovy script to bypass unlock screen
+              sudo mkdir -p /var/lib/jenkins/init.groovy.d
+              sudo cat << 'EOG' | sudo tee /var/lib/jenkins/init.groovy.d/skipSetup.groovy
+              import jenkins.model.*
+              import jenkins.install.*
+              import java.nio.file.Files
+              import java.nio.file.Paths
+
+              def instance = Jenkins.getInstance()
+              def state = instance.getInstallState()
+
+              if (state == InstallState.INITIAL_SETUP) {
+                  def passwordFile = "/var/lib/jenkins/secrets/initialAdminPassword"
+                  if (Files.exists(Paths.get(passwordFile))) {
+                      def password = new String(Files.readAllBytes(Paths.get(passwordFile))).trim()
+                      println "Unlocking Jenkins with password: " + password
+
+                      InstallState.setCurrentLevel(InstallState.INITIAL_SETUP_COMPLETED)
+                      instance.save()
+                      println "Jenkins setup completed!"
+                  } else {
+                      println "Initial admin password file not found!"
+                  }
+              }
+              EOG
+
+              # Restart Jenkins to apply the script
+              sudo systemctl restart jenkins
 
               # Wait for Jenkins to be ready
               sleep 60
 
+
+              # Install AWS CLI (if not installed)
+              sudo yum install -y aws-cli
+
               # Install AWS EC2 and ECS plugins via Jenkins CLI
               JENKINS_URL="http://localhost:8080"
-              ADMIN_PASSWORD=$(sudo cat /home/ec2-user/jenkins-admin-password)
 
               wget -O jenkins-cli.jar "$JENKINS_URL/jnlpJars/jenkins-cli.jar"
               java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD install-plugin aws-ecs aws-java-sdk-ec2
-              java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD restart
+              #java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD restart
+              # RSG changed restart to safe-restart
+              java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD safe-restart
 
-              # SSM Agent
-              sudo yum install -y amazon-ssm-agent
-              sudo systemctl start amazon-ssm-agent
-              sudo systemctl enable amazon-ssm-agent
-              sudo dnf install -y https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm
+              # Use SSM to update Jenkins password if necessary (if password has changed)
+              INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+              NEW_PASSWORD=$(aws ssm get-parameter --name "/jenkins/admin-password" --query "Parameter.Value" --output text)
+
+              # RSG comment out
+              #if [ "$NEW_PASSWORD" != "" ]; then
+              #  echo "$NEW_PASSWORD" > /var/lib/jenkins/secrets/initialAdminPassword
+              #  sudo systemctl restart jenkins
+              #fi
+              # RSG comment out
+
               EOF
 
   tags = {
