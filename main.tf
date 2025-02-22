@@ -151,6 +151,7 @@ resource "aws_instance" "jenkins_master" {
 
   user_data = <<-EOF
               #!/bin/bash
+              set -x
               sudo yum update -y
               sudo yum install -y wget java-17-amazon-corretto-devel
 
@@ -208,7 +209,7 @@ resource "aws_instance" "jenkins_master" {
               systemctl start jenkins
 
               # Wait for Jenkins to be ready
-              sleep 30
+              sleep 90
 
               # Wait for Jenkins to be fully up before installing plugins
               JENKINS_URL="http://localhost:8080/"
@@ -229,10 +230,13 @@ resource "aws_instance" "jenkins_master" {
 
 
               # download jenkins cli from this local jenkins master
-              wget -O jenkins-cli.jar "$JENKINS_URL/jnlpJars/jenkins-cli.jar"
+              mkdir -p /usr/local/bin/jenkins/
+              chmod 755 /usr/local/bin/jenkins/
+              wget -O /usr/local/bin/jenkins/jenkins-cli.jar "$JENKINS_URL/jnlpJars/jenkins-cli.jar"
 
               # Install plugins from plugins.txt
-              sudo -u jenkins java -jar /usr/share/jenkins/jenkins-cli.jar -s $JENKINS_URL install-plugin $(tr '\n' ' ' < /var/lib/jenkins/plugins.txt)
+              #sudo -u jenkins java -jar /usr/share/jenkins/jenkins-cli.jar -s $JENKINS_URL install-plugin $(tr '\n' ' ' < /var/lib/jenkins/plugins.txt)
+              sudo -u jenkins java -jar /usr/local/bin/jenkins/jenkins-cli.jar -s $JENKINS_URL install-plugin $(tr '\n' ' ' < /var/lib/jenkins/plugins.txt)
 
               # restart jenkins to activate pluglins
               systemctl restart jenkins
@@ -247,6 +251,7 @@ resource "aws_instance" "jenkins_master" {
               #INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
               #NEW_PASSWORD=$(aws ssm get-parameter --name "/jenkins/admin-password" --query "Parameter.Value" --output text)
 
+              set +x
               EOF
 
   tags = {
