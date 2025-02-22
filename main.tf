@@ -188,10 +188,34 @@ resource "aws_instance" "jenkins_master" {
               # Reload systemd to apply change
               systemctl daemon-reload
               systemctl enable jenkins
+
+              # prepare list of plugins before jenkins starts for the very first time
+              # Prepare the plugin list BEFORE Jenkins starts
+              cat <<EOP > /var/lib/jenkins/plugins.txt
+              amazon-ecs
+              ec2
+              git
+              pipeline
+              credentials
+              workflow-aggregator
+              job-dsl
+              blueocean
+              EOP
+
+              # Ensure correct ownership
+              chown -R jenkins:jenkins /var/lib/jenkins/
+
               systemctl start jenkins
 
               # Wait for Jenkins to be ready
-              sleep 60
+              sleep 30
+
+              # Wait for Jenkins to be fully up before installing plugins
+              JENKINS_URL="http://localhost:8080/"
+              until curl -s --head --fail $JENKINS_URL; do
+                  sleep 10
+              done
+
 
               # Capture initial Jenkins admin password
               JENKINS_PASSWORD_FILE="/var/lib/jenkins/secrets/initialAdminPassword"
@@ -204,26 +228,24 @@ resource "aws_instance" "jenkins_master" {
               aws ssm put-parameter --name "/jenkins/admin-password" --value "$ADMIN_PASSWORD" --type "SecureString" --overwrite --region us-east-2
 
 
-              # Install AWS EC2 and ECS plugins via Jenkins CLI
-              JENKINS_URL="http://localhost:8080"
-
+              # download jenkins cli from this local jenkins master
               wget -O jenkins-cli.jar "$JENKINS_URL/jnlpJars/jenkins-cli.jar"
-              java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD install-plugin amazon-ecs ec2 aws-java-sdk-ec2
+
+              # Install plugins from plugins.txt
+              sudo -u jenkins java -jar /usr/share/jenkins/jenkins-cli.jar -s $JENKINS_URL install-plugin $(tr '\n' ' ' < /var/lib/jenkins/plugins.txt)
+
+              # restart jenkins to activate pluglins
+              systemctl restart jenkins
+
+              # Install AWS EC2 and ECS plugins via Jenkins CLI
+              #java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD install-plugin amazon-ecs ec2 aws-java-sdk-ec2
               #java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD restart
               # RSG changed restart to safe-restart
-              java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD safe-restart
+              #java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD safe-restart
 
               # Use SSM to update Jenkins password if necessary (if password has changed)
-              INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
-              NEW_PASSWORD=$(aws ssm get-parameter --name "/jenkins/admin-password" --query "Parameter.Value" --output text)
-
-              # RSG comment out
-              #if [ "$NEW_PASSWORD" != "" ]; then
-              #  echo "$NEW_PASSWORD" > /var/lib/jenkins/secrets/initialAdminPassword
-              #  sudo systemctl restart jenkins
-              #fi
-              # RSG comment out
-
+              #INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+              #NEW_PASSWORD=$(aws ssm get-parameter --name "/jenkins/admin-password" --query "Parameter.Value" --output text)
 
               EOF
 
