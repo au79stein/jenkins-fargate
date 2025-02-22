@@ -189,25 +189,22 @@ resource "aws_instance" "jenkins_master" {
               sudo mkdir -p /var/lib/jenkins/init.groovy.d
               sudo cat << 'EOG' | sudo tee /var/lib/jenkins/init.groovy.d/skipSetup.groovy
               import jenkins.model.*
-              import jenkins.install.*
               import java.nio.file.Files
               import java.nio.file.Paths
-
-              def instance = Jenkins.getInstance()
-              def state = instance.getInstallState()
-
-              if (state == InstallState.INITIAL_SETUP) {
-                  def passwordFile = "/var/lib/jenkins/secrets/initialAdminPassword"
-                  if (Files.exists(Paths.get(passwordFile))) {
-                      def password = new String(Files.readAllBytes(Paths.get(passwordFile))).trim()
-                      println "Unlocking Jenkins with password: " + password
-
-                      InstallState.setCurrentLevel(InstallState.INITIAL_SETUP_COMPLETED)
-                      instance.save()
-                      println "Jenkins setup completed!"
-                  } else {
-                      println "Initial admin password file not found!"
-                  }
+              
+              // Skip the unlock screen if the initialAdminPassword exists
+              def passwordFile = "/var/lib/jenkins/secrets/initialAdminPassword"
+              if (Files.exists(Paths.get(passwordFile))) {
+                  def password = new String(Files.readAllBytes(Paths.get(passwordFile))).trim()
+                  println "Unlocking Jenkins with password: " + password
+              
+                  // Set Jenkins installation state to completed (skipping the initial setup)
+                  def instance = Jenkins.getInstance()
+                  instance.setInstallState(InstallState.INITIAL_SETUP_COMPLETED)
+                  instance.save()
+                  println "Jenkins setup completed!"
+              } else {
+                  println "Initial admin password file not found!"
               }
               EOG
 
@@ -225,7 +222,7 @@ resource "aws_instance" "jenkins_master" {
               JENKINS_URL="http://localhost:8080"
 
               wget -O jenkins-cli.jar "$JENKINS_URL/jnlpJars/jenkins-cli.jar"
-              java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD install-plugin aws-ecs aws-java-sdk-ec2
+              java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD install-plugin amazon-ecs ec2 aws-java-sdk-ec2
               #java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD restart
               # RSG changed restart to safe-restart
               java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD safe-restart
