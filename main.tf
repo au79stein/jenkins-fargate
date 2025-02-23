@@ -234,22 +234,24 @@ resource "aws_instance" "jenkins_master" {
               chmod 755 /usr/local/bin/jenkins/
               wget -O /usr/local/bin/jenkins/jenkins-cli.jar "$JENKINS_URL/jnlpJars/jenkins-cli.jar"
 
+              # Create the Jenkins admin user securely
+              java -jar /usr/local/bin/jenkins/jenkins-cli.jar -s $JENKINS_URL groovy = <<EOA
+              import jenkins.model.*
+              import hudson.security.*
+              def instance = Jenkins.getInstance()
+              def hudsonRealm = new HudsonPrivateSecurityRealm(false)
+              def user = hudsonRealm.createAccount("admin", "Jenkins-1-Secure-Password!")
+              user.save()
+              instance.setSecurityRealm(hudsonRealm)
+              instance.save()
+              EOA
+
               # Install plugins from plugins.txt
               #sudo -u jenkins java -jar /usr/share/jenkins/jenkins-cli.jar -s $JENKINS_URL install-plugin $(tr '\n' ' ' < /var/lib/jenkins/plugins.txt)
               sudo -u jenkins java -jar /usr/local/bin/jenkins/jenkins-cli.jar -s $JENKINS_URL install-plugin $(tr '\n' ' ' < /var/lib/jenkins/plugins.txt)
 
               # restart jenkins to activate pluglins
               systemctl restart jenkins
-
-              # Install AWS EC2 and ECS plugins via Jenkins CLI
-              #java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD install-plugin amazon-ecs ec2 aws-java-sdk-ec2
-              #java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD restart
-              # RSG changed restart to safe-restart
-              #java -jar jenkins-cli.jar -s "$JENKINS_URL" -auth admin:$ADMIN_PASSWORD safe-restart
-
-              # Use SSM to update Jenkins password if necessary (if password has changed)
-              #INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
-              #NEW_PASSWORD=$(aws ssm get-parameter --name "/jenkins/admin-password" --query "Parameter.Value" --output text)
 
               set +x
               EOF
