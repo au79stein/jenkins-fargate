@@ -1,0 +1,10 @@
+jenkins:
+  clouds:
+    - amazonEcs:
+        name: "ECS-Fargate-Agents"
+        cluster: "${var.ecs_cluster_name}"
+        taskTemplate:
+          taskDefinition: "${aws_ecs_task_definition.jenkins_agent.arn}"
+          executionRoleArn: "${aws_iam_role.ecs_task_role.arn}"
+        region: "us-east-2"
+

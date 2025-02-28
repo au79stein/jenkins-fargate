@@ -2,6 +2,58 @@ provider "aws" {
   region = "us-east-2"
 }
 
+# Fetch Latest Amazon Linux 2023 AMI
+data "aws_ami" "amazon_linux_2023" {
+  most_recent = true
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  owners = ["137112412989"]  # Amazon Linux 2023 AMI owner ID
+}
+
+#data "aws_vpc" "main" {
+#  tags = {
+#    Name = "main_vpc"  # Replace with your actual tag name
+#  }
+#}
+
+# Lookup the VPC dynamically by its tag
+#data "aws_vpc" "main_vpc" {
+#  filter {
+#    name   = "tag:Name"
+#    values = ["main_vpc"]  # Replace with the tag that identifies your VPC
+#  }
+#}
+
+#data "aws_subnet" "public_subnet" {
+#  tags = {
+#    Name = "public-subnet"  # Replace with the actual subnet tag name
+#  }
+#}
+
+# Lookup the subnet dynamically based on its tag name and vpc_id
+#data "aws_subnet" "public_subnet" {
+#  filter {
+#    name   = "tag:Name"
+#    values = ["public-subnet"]  # Replace with your actual subnet name
+#  }
+#
+#  vpc_id = data.aws_vpc.main_vpc.id  # Reference the dynamically fetched VPC ID
+#}
+
 # Define the VPC
 resource "aws_vpc" "main" {
   cidr_block = "10.0.0.0/16"
@@ -19,8 +71,36 @@ resource "aws_subnet" "public_subnet" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "Public Subnet"
+    Name = "public-subnet"
   }
+}
+
+# Define the Private Subnet
+resource "aws_subnet" "private_subnet" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.2.0/24"
+  availability_zone       = "us-east-2b"
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "private-subnet"
+  }
+}
+
+# Not sure I need this right now
+# Define a NAT Gateway (for outbound internet access from private subnet)
+resource "aws_nat_gateway" "nat_gateway" {
+  allocation_id = aws_eip.nat_eip.id
+  subnet_id     = aws_subnet.public_subnet.id
+
+  tags = {
+    Name = "NAT Gateway"
+  }
+}
+
+# Define the Elastic IP for the NAT Gateway
+resource "aws_eip" "nat_eip" {
+  domain = "vpc"
 }
 
 # Create Internet Gateway
@@ -52,32 +132,13 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# Fetch Latest Amazon Linux 2023 AMI
-data "aws_ami" "amazon_linux_2023" {
-  most_recent = true
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
-  }
-
-  filter {
-    name   = "architecture"
-    values = ["x86_64"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-
-  owners = ["137112412989"]  # Amazon Linux 2023 AMI owner ID
-}
-
 # Create Jenkins Security Group
 resource "aws_security_group" "jenkins_sg" {
-  name_prefix = "jenkins-sg-"
+  #name_prefix = "jenkins-sg-"
+  name = "jenkins-sg"
   description = "Allow SSH and HTTP(S) access"
+  vpc_id      = aws_vpc.main.id
+  #vpc_id      = data.aws_vpc.main.id  # Dynamically reference the VPC using the data source
 
   ingress {
     from_port   = 22
@@ -98,6 +159,19 @@ resource "aws_security_group" "jenkins_sg" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_ecs_service" "jenkins_agents" {
+  name            = "jenkins-agent-service"
+  cluster         = aws_ecs_cluster.jenkins_agents.id
+  task_definition = aws_ecs_task_definition.jenkins_agent.arn
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = [aws_subnet.public_subnet.id]  # Reference dynamically created subnet
+    security_groups  = [aws_security_group.jenkins_sg.id]  # Reference dynamically created SG
+    assign_public_ip = true
   }
 }
 
@@ -140,14 +214,16 @@ resource "aws_iam_instance_profile" "ec2_ssm_instance_profile" {
 resource "aws_instance" "jenkins_master" {
   ami                   = data.aws_ami.amazon_linux_2023.id
   instance_type         = "t3.micro"
+  #subnet_id             = data.aws_subnet.public_subnet.id  # Dynamically fetch the subnet ID
+  subnet_id             = aws_subnet.public_subnet.id
   key_name              = "new-aws-deploy-key"
   iam_instance_profile  = aws_iam_instance_profile.ec2_ssm_instance_profile.name
+  vpc_security_group_ids = [aws_security_group.jenkins_sg.id]
 
   root_block_device {
     volume_size = 20
   }
 
-  vpc_security_group_ids = [aws_security_group.jenkins_sg.id]
 
   user_data = <<-EOF
               #!/bin/bash
@@ -285,56 +361,59 @@ resource "aws_eip" "jenkins_eip" {
 #}
 
 # Create ECS Cluster for Jenkins Agents
-resource "aws_ecs_cluster" "jenkins_fargate_cluster" {
-  name = "jenkins-fargate-cluster"
+resource "aws_ecs_cluster" "jenkins_agents" {
+  name = "jenkins-ecs-cluster"
 }
 
-resource "aws_iam_role" "ecs_task_role" {
-  name = "jenkins-ecs-agent-role"
-  
+resource "aws_iam_role" "ecs_task_execution_role" {
+  name = "ecsTaskExecutionRole"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
-        Action    = "sts:AssumeRole"
-        Effect    = "Allow"
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
         Principal = {
           Service = "ecs-tasks.amazonaws.com"
         }
-      },
+      }
     ]
   })
 }
 
-#resource "aws_iam_role_policy_attachment" "ecs_task_role_policy" {
-#  role       = aws_iam_role.ecs_task_role.name
-#  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
-#}
-
-resource "aws_iam_policy_attachment" "ecs_task_role_policy_attachment" {
-  name       = "ecs-task-role-policy-attachment"
-  roles      = [aws_iam_role.ecs_task_role.name]
+resource "aws_iam_policy_attachment" "ecs_task_execution_role_policy" {
+  name       = "ecs-task-execution-role-policy"
+  roles      = [aws_iam_role.ecs_task_execution_role.name]
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
 resource "aws_ecs_task_definition" "jenkins_agent" {
-  family                = "jenkins-agent"
+  family                   = "jenkins-agent"
   requires_compatibilities = ["FARGATE"]
-  network_mode          = "awsvpc"
-  cpu                   = "256"
-  memory                = "512"
-  execution_role_arn    = aws_iam_role.ecs_task_role.arn
-  task_role_arn         = aws_iam_role.ecs_task_role.arn
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+  execution_role_arn       = aws_iam_role.ecs_task_execution_role.arn
 
-  container_definitions = jsonencode([{
-    name      = "jenkins-agent"
-    image     = "jenkins/inbound-agent:latest"
-    essential = true
-    portMappings = [{
-      containerPort = 8080
-      protocol      = "tcp"
-    }]
-  }])
+  container_definitions = jsonencode([
+    {
+      name      = "jenkins-agent"
+      image     = "jenkins/inbound-agent:latest"
+      essential = true
+      environment = [
+        { "name": "JENKINS_URL", "value": "http://${aws_eip.jenkins_eip.public_ip}:8080" }
+
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = "/ecs/jenkins-agent"
+          awslogs-region        = "us-east-2"
+          awslogs-stream-prefix = "ecs"
+        }
+      }
+    }
+  ])
 }
 
 # Output Jenkins URL
@@ -344,6 +423,11 @@ output "jenkins_url" {
 
 # Output ECS Cluster ARN
 output "ecs_cluster_arn" {
-  value = aws_ecs_cluster.jenkins_fargate_cluster.arn
+  value = aws_ecs_cluster.jenkins_agents.arn
+}
+
+output "jenkins_eip" {
+  value = aws_eip.jenkins_eip.public_ip
+
 }
 
